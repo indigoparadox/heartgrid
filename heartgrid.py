@@ -27,38 +27,6 @@ class InvalidGridCharException( Exception ):
       self.bad_char = bad_char
       Exception.__init__( self, message )
 
-class HeartGridSanitizer( object ):
-
-   ''' Create the printable character filter stuff inside of a class so we can
-   neatly provide logging feedback during building. '''
-
-   logger = None
-
-   printable_re = None
-
-   def __init__( self ):
-
-      self.logger = logging.getLogger( 'heartgrid.sanitizer' )
-
-      self.logger.info( 'Building safe character list...' )
-
-      chars_all = (unichr( i ) for i in xrange( 0x110000 ))
-      chars_control = ''.join( c for c in chars_all \
-         if unicodedata.category( c ) == 'Cc' or \
-            unicodedata.category( c ) == 'Cf' or \
-            unicodedata.category( c ) == 'Cs' or \
-            unicodedata.category( c ) == 'Co' or \
-            unicodedata.category( c ) == 'Cn' or \
-            unicodedata.category( c ) == 'Zs' or \
-            unicodedata.category( c ) == 'Zl' or \
-            unicodedata.category( c ) == 'Zp'
-      )
-      self.printable_re = \
-         re.compile( u'([{}])'.format( re.escape( chars_control ) ) )
-
-      self.logger.info( 'Safe character list complete.' )
-
-
 class HeartGridHandler( SocketServer.BaseRequestHandler ):
 
    logger = None
@@ -178,13 +146,10 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
    data_grid = {}
    data_lock = threading.Lock()
    dump_path = None
-   sanitizer = None
 
    def __init__( self, server_address, dump_path=None ):
       
       self.logger = logging.getLogger( 'heartgrid.server' )
-
-      self.sanitizer = HeartGridSanitizer()
 
       if dump_path:
          self.dump_path = dump_path
@@ -229,7 +194,8 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
 
       # Make sure data is clean.
       for input_index_iter in range( len( data ) ):
-         data[input_index_iter] = self.sanitize_char(
+         # Just let the exception handler trigger if something is off.
+         self.sanitize_char(
             data[input_index_iter]
          )
       
@@ -298,14 +264,22 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
       self.logger.info( 'Dump saved to {}.'.format( dump_path ) )
 
    def sanitize_char( self, char ):
+
+      u_char = unicode( char )
       
-      char_match = self.sanitizer.printable_re.match( char )
-      if char_match:
-         return char_match.groups()[0]
-      else:
+      if unicodedata.category( u_char ) == 'Cc' or \
+      unicodedata.category( u_char ) == 'Cf' or \
+      unicodedata.category( u_char ) == 'Cs' or \
+      unicodedata.category( u_char ) == 'Co' or \
+      unicodedata.category( u_char ) == 'Cn' or \
+      unicodedata.category( u_char ) == 'Zs' or \
+      unicodedata.category( u_char ) == 'Zl' or \
+      unicodedata.category( u_char ) == 'Zp':
          raise InvalidGridCharException(
             'unprintable character entered', char
          )
+      else:
+         return char
 
    def handle_interrupt( self, signal, frame ):
       
