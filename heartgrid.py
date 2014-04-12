@@ -9,17 +9,55 @@ import signal
 import sys
 import json
 import re
+import unicodedata
 
 DATA_GRID_MAX = 65535
 REQUEST_MAX = 64
 INPUT_MAX = 64
+
 INT_RE = re.compile( '([0-9]+)' )
 HEX_RE = re.compile( '(0x)?([0-9a-f]+)' )
 
-# TODO: Strip "dangerous" (unprintable) characters.
-
 class InvalidGridDataException( Exception ):
    pass
+
+class InvalidGridCharException( Exception ):
+   bad_char = ''
+   def __init__( self, message, bad_char ):
+      self.bad_char = bad_char
+      Exception.__init__( self, message )
+
+class HeartGridSanitizer( object ):
+
+   ''' Create the printable character filter stuff inside of a class so we can
+   neatly provide logging feedback during building. '''
+
+   logger = None
+
+   printable_re = None
+
+   def __init__( self ):
+
+      self.logger = logging.getLogger( 'heartgrid.sanitizer' )
+
+      self.logger.info( 'Building safe character list...' )
+
+      chars_all = (unichr( i ) for i in xrange( 0x110000 ))
+      chars_control = ''.join( c for c in chars_all \
+         if unicodedata.category( c ) == 'Cc' or \
+            unicodedata.category( c ) == 'Cf' or \
+            unicodedata.category( c ) == 'Cs' or \
+            unicodedata.category( c ) == 'Co' or \
+            unicodedata.category( c ) == 'Cn' or \
+            unicodedata.category( c ) == 'Zs' or \
+            unicodedata.category( c ) == 'Zl' or \
+            unicodedata.category( c ) == 'Zp'
+      )
+      self.printable_re = \
+         re.compile( u'([{}])'.format( re.escape( chars_control ) ) )
+
+      self.logger.info( 'Safe character list complete.' )
+
 
 class HeartGridHandler( SocketServer.BaseRequestHandler ):
 
@@ -63,6 +101,7 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
             elif 'poke' == command_iter[0].lower():
 
                if 3 > len( command_iter ):
+                  # Invalid, show help.
                   self.request.send( 'usage: poke <address> <data>\n' )
                else:
                   self.server.grid_write(
@@ -73,6 +112,7 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
             elif 'peek' == command_iter[0].lower():
 
                if 2 > len( command_iter ):
+                  # Invalid, show help.
                   self.request.send( 'usage: peek <address> [length]\n' )
                else:
                   address = HeartGridHandler.read_hex( command_iter[1] )
@@ -88,6 +128,14 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
                   if value:
                      self.request.send( value + '\n' )
 
+         except InvalidGridCharException, e:
+            self.logger.warn(
+               'Client {} attempted to use non-printable: {}'.format(
+                  self.request.getsockname(),
+                  e.bad_char.encode( 'ascii', 'xmlcharrefreplace' )
+               )
+            )
+            self.request.send( e.message + '\n' )
          except InvalidGridDataException, e:
             self.request.send( e.message + '\n' )
          except ValueError, e:
@@ -130,10 +178,13 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
    data_grid = {}
    data_lock = threading.Lock()
    dump_path = None
+   sanitizer = None
 
    def __init__( self, server_address, dump_path=None ):
       
       self.logger = logging.getLogger( 'heartgrid.server' )
+
+      self.sanitizer = HeartGridSanitizer()
 
       if dump_path:
          self.dump_path = dump_path
@@ -162,6 +213,10 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
       
       SocketServer.TCPServer.__init__( self, server_address, HeartGridHandler )
 
+   def serve_forever( self ):
+      self.logger.info( 'Listening for incoming connections...' )
+      SocketServer.TCPServer.serve_forever( self )
+
    def grid_write( self, address, data ):
 
       self.logger.debug( 'Writing {} to {}...'.format( data, address ) )
@@ -172,13 +227,19 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
       if INPUT_MAX <= len( data ):
          raise InvalidGridDataException( 'input length too long.' )
 
-      self.data_lock.acquire()
+      # Make sure data is clean.
+      for input_index_iter in range( len( data ) ):
+         data[input_index_iter] = self.sanitize_char(
+            data[input_index_iter]
+         )
       
+      self.data_lock.acquire()
+
       # If data is longer than 1, split it into the next cell.
       data_index_iter = address
-      for src_index_iter in range( len( data ) ):
+      for input_index_iter in range( len( data ) ):
          # Write the current cell.
-         self.data_grid[str( data_index_iter )] = data[src_index_iter]
+         self.data_grid[str( data_index_iter )] = data[input_index_iter]
 
          # Increment the data index.
          data_index_iter += 1
@@ -235,6 +296,16 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
          self.logger.error( 'Error saving dump: {}'.format( e.message ) )
 
       self.logger.info( 'Dump saved to {}.'.format( dump_path ) )
+
+   def sanitize_char( self, char ):
+      
+      char_match = self.sanitizer.printable_re.match( char )
+      if char_match:
+         return char_match.groups()[0]
+      else:
+         raise InvalidGridCharException(
+            'unprintable character entered', char
+         )
 
    def handle_interrupt( self, signal, frame ):
       
