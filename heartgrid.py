@@ -250,7 +250,7 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
 
    def grid_dump( self, dump_path ):
 
-      self.logger.info( 'Saving dump to {}...'.format( dump_path ) )
+      self.logger.debug( 'Saving dump to {}...'.format( dump_path ) )
 
       try:
          with open( dump_path, 'w' ) as dump_file:
@@ -260,7 +260,7 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
       except IOError, e:
          self.logger.error( 'Error saving dump: {}'.format( e.message ) )
 
-      self.logger.info( 'Dump saved to {}.'.format( dump_path ) )
+      self.logger.debug( 'Dump saved to {}.'.format( dump_path ) )
 
    def sanitize_char( self, char ):
 
@@ -294,7 +294,7 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
 
    def handle_user1( self, signal, frame ):
       
-      self.logger.info( 'USER1 received. Forcing dump...' )
+      self.logger.debug( 'USER1 received. Forcing dump...' )
 
       self.grid_dump( self.dump_path )
 
