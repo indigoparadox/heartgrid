@@ -4,12 +4,18 @@ import argparse
 import SocketServer
 import logging
 import threading
+import atexit
+import signal
+import sys
+import json
 
 DATA_GRID_MAX = 65535
 REQUEST_MAX = 64
 INPUT_MAX = 64
 
 # TODO: Strip "dangerous" (unprintable) characters.
+
+# TODO: Load dump from file.
 
 class InvalidGridDataException( Exception ):
    pass
@@ -33,15 +39,28 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
          'Connection accepted from: {}'.format( self.client_address )
       )
 
+      self.request.send( '{} bytes ram available.\n'.format( DATA_GRID_MAX ) )
+      self.request.send( 'commands available: peek poke quit\n' )
+
       socket_file = self.request.makefile()
       while self.listening:
+         self.request.send( 'ready> ' )
+
          # Accept commands.
          command_iter = socket_file.readline().strip().split( ' ' )
 
+         self.logger.info( 'Client {} used "{}".'.format(
+            self.request.getsockname(),
+            command_iter
+         ) )
+         
          try:
             if 'quit' == command_iter[0].lower():
+               
                self.listening = False
+
             elif 'poke' == command_iter[0].lower():
+
                if 3 > len( command_iter ):
                   self.request.send( 'usage: poke <address> <data>\n' )
                else:
@@ -49,7 +68,9 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
                   self.server.grid_write(
                      int( command_iter[1] ), command_iter[2]
                   )
+
             elif 'peek' == command_iter[0].lower():
+
                if 2 > len( command_iter ):
                   self.request.send( 'usage: peek <address> [length]\n' )
                else:
@@ -72,6 +93,10 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
          except ValueError, e:
             self.request.send( e.message + '\n' )
 
+      self.logger.info( 'Client {} disconnected.'.format(
+         self.request.getsockname()
+      ) )
+
 class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
 
    daemon_threads = True
@@ -80,16 +105,43 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
    logger = None
    data_grid = {}
    data_lock = threading.Lock()
+   dump_path = None
 
-   def __init__( self, server_address ):
+   def __init__( self, server_address, dump_path=None ):
       
       self.logger = logging.getLogger( 'heartgrid.server' )
 
-      self.data_grid = {i : 0 for i in range( DATA_GRID_MAX )}
+      if dump_path:
+         self.dump_path = dump_path
+         atexit.register( self.grid_dump, dump_path )
+         
+         # Load existing dump.
+         self.logger.info( 'Loading dump "{}"...'.format( dump_path ) )
+         try:
+            with open( dump_path ) as dump_file:
+               self.data_grid = json.loads( dump_file.read() )
+            self.logger.info( 'Dump "{}" loaded with {} cells.'.format(
+               dump_path, len( self.data_grid )
+            ) )
+         except IOError, e:
+            self.logger.warn( 'Unable to load dump. Setting up new grid...' )
+            self.data_grid = {i : 0 for i in range( DATA_GRID_MAX )}
+
+      else:
+         # Just setup a fresh grid.
+         self.data_grid = {i : 0 for i in range( DATA_GRID_MAX )}
+
+      # Handle interrupt/termination gracefully.
+      signal.signal( signal.SIGINT, self.handle_interrupt )
+      signal.signal( signal.SIGTERM, self.handle_terminate )
+      signal.signal( signal.SIGUSR1, self.handle_user1 )
       
       SocketServer.TCPServer.__init__( self, server_address, HeartGridHandler )
 
    def grid_write( self, address, data ):
+
+      self.logger.debug( 'Writing {} to {}...'.format( data, address ) )
+
       if DATA_GRID_MAX <= address:
          raise InvalidGridDataException( 'address out of range.' )
 
@@ -114,6 +166,9 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
       self.data_lock.release()
 
    def grid_read( self, address, length=1 ):
+
+      self.logger.debug( 'Reading {}...'.format( address ) )
+
       if DATA_GRID_MAX <= address:
          raise InvalidGridDataException( 'address out of range.' )
 
@@ -143,6 +198,38 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
 
       return value
 
+   def grid_dump( self, dump_path ):
+
+      self.logger.info( 'Saving dump to {}...'.format( dump_path ) )
+
+      try:
+         with open( dump_path, 'w' ) as dump_file:
+            self.data_lock.acquire()
+            dump_file.write( json.dumps( self.data_grid ) )
+            self.data_lock.release()
+      except IOError, e:
+         self.logger.error( 'Error saving dump: {}'.format( e.message ) )
+
+      self.logger.info( 'Dump saved to {}.'.format( dump_path ) )
+
+   def handle_interrupt( self, signal, frame ):
+      
+      self.logger.info( 'Interrupt received. Quitting...' )
+
+      sys.exit( 0 )
+
+   def handle_terminate( self, signal, frame ):
+      
+      self.logger.info( 'Terminate received. Quitting...' )
+
+      sys.exit( 0 )
+
+   def handle_user1( self, signal, frame ):
+      
+      self.logger.info( 'USER1 received. Forcing dump...' )
+
+      self.grid_dump( self.dump_path )
+
 if '__main__' == __name__:
 
    parser = argparse.ArgumentParser()
@@ -160,6 +247,10 @@ if '__main__' == __name__:
       '-v', '--verbose', action='store_true', dest='verbose',
       help='Enable verbose debug output.'
    )
+   parser.add_argument(
+      '-d', '--dump-path', action='store', dest='dump_path',
+      help='Load/save the memory to a dump file at dump_path.'
+   )
 
    args = parser.parse_args()
 
@@ -168,6 +259,6 @@ if '__main__' == __name__:
    else:
       logging.basicConfig( level=logging.INFO )
 
-   server = HeartGridServer( (args.address, args.port) )
+   server = HeartGridServer( (args.address, args.port), args.dump_path )
    server.serve_forever()
 
