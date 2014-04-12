@@ -98,9 +98,8 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
 
          except InvalidGridCharException, e:
             self.logger.warn(
-               'Client {} attempted to use non-printable: {}'.format(
-                  self.request.getsockname(),
-                  e.bad_char.encode( 'ascii', 'xmlcharrefreplace' )
+               'Client {} attempted to use non-printable character.'.format(
+                  self.request.getsockname()
                )
             )
             self.request.send( e.message + '\n' )
@@ -276,7 +275,7 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
       unicodedata.category( u_char ) == 'Zl' or \
       unicodedata.category( u_char ) == 'Zp':
          raise InvalidGridCharException(
-            'unprintable character entered', char
+            'unprintable character entered', u_char
          )
       else:
          return char
