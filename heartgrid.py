@@ -57,8 +57,7 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
          command_iter = socket_file.readline().strip().split( ' ' )
 
          self.logger.info( 'Client {} used "{}".'.format(
-            self.request.getsockname(),
-            command_iter
+            self.client_address, command_iter
          ) )
          
          try:
@@ -99,7 +98,7 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
          except InvalidGridCharException, e:
             self.logger.warn(
                'Client {} attempted to use non-printable character.'.format(
-                  self.request.getsockname()
+                  self.client_address
                )
             )
             self.request.send( e.message + '\n' )
@@ -109,7 +108,7 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
             self.request.send( e.message + '\n' )
 
       self.logger.info( 'Client {} disconnected.'.format(
-         self.request.getsockname()
+         self.client_address
       ) )
 
    @staticmethod
