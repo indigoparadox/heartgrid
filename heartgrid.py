@@ -8,14 +8,15 @@ import atexit
 import signal
 import sys
 import json
+import re
 
 DATA_GRID_MAX = 65535
 REQUEST_MAX = 64
 INPUT_MAX = 64
+INT_RE = re.compile( '([0-9]+)' )
+HEX_RE = re.compile( '(0x)?([0-9a-f]+)' )
 
 # TODO: Strip "dangerous" (unprintable) characters.
-
-# TODO: Load dump from file.
 
 class InvalidGridDataException( Exception ):
    pass
@@ -64,9 +65,9 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
                if 3 > len( command_iter ):
                   self.request.send( 'usage: poke <address> <data>\n' )
                else:
-                  # TODO: Maybe translate the first argument from hex.
                   self.server.grid_write(
-                     int( command_iter[1] ), command_iter[2]
+                     HeartGridHandler.read_hex( command_iter[1] ),
+                     command_iter[2]
                   )
 
             elif 'peek' == command_iter[0].lower():
@@ -74,12 +75,11 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
                if 2 > len( command_iter ):
                   self.request.send( 'usage: peek <address> [length]\n' )
                else:
-                  # TODO: Maybe translate the arguments from hex.
-                  address = int( command_iter[1] )
+                  address = HeartGridHandler.read_hex( command_iter[1] )
 
                   if 3 <= len( command_iter ):
                      # User supplied a length, too.
-                     length = int( command_iter[2] )
+                     length = HeartGridHandler.read_hex( command_iter[2] )
                   else:
                      length = 1
 
@@ -96,6 +96,30 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
       self.logger.info( 'Client {} disconnected.'.format(
          self.request.getsockname()
       ) )
+
+   @staticmethod
+   def read_hex( data ):
+
+      # See if data is a decimal.
+      int_match = INT_RE.match( data )
+      if int_match and len( int_match.groups()[0] ) == len( data ):
+         return int( int_match.groups()[0] )
+
+      # See if data is a hexidecimal.
+      hex_match = HEX_RE.match( data.lower() )
+      if hex_match:
+         # Only add the length of the prefix if there is a prefix.
+         if hex_match.groups()[0]:
+            hex_len = \
+               len( hex_match.groups()[0] ) + len( hex_match.groups()[1] )
+         else:
+            hex_len = len( hex_match.groups()[1] )
+
+         # Only return if we used all the data.
+         if len( data ) == hex_len:
+            return int( hex_match.groups()[1], 16 )
+
+      raise ValueError( 'unable to convert as decimal or hexidecimal.' )
 
 class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
 
@@ -125,11 +149,11 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
             ) )
          except IOError, e:
             self.logger.warn( 'Unable to load dump. Setting up new grid...' )
-            self.data_grid = {i : 0 for i in range( DATA_GRID_MAX )}
+            self.data_grid = {str( i ) : 0 for i in range( DATA_GRID_MAX )}
 
       else:
          # Just setup a fresh grid.
-         self.data_grid = {i : 0 for i in range( DATA_GRID_MAX )}
+         self.data_grid = {str( i ) : 0 for i in range( DATA_GRID_MAX )}
 
       # Handle interrupt/termination gracefully.
       signal.signal( signal.SIGINT, self.handle_interrupt )
@@ -154,7 +178,7 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
       data_index_iter = address
       for src_index_iter in range( len( data ) ):
          # Write the current cell.
-         self.data_grid[data_index_iter] = data[src_index_iter]
+         self.data_grid[str( data_index_iter )] = data[src_index_iter]
 
          # Increment the data index.
          data_index_iter += 1
@@ -182,8 +206,8 @@ class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
       data_index_iter = address
       for out_index_iter in range( length ):
          # Read the current cell.
-         if self.data_grid[data_index_iter]:
-            value += str( self.data_grid[data_index_iter] )
+         if self.data_grid[str( data_index_iter )]:
+            value += str( self.data_grid[str( data_index_iter )] )
          else:
             value += '0'
          
