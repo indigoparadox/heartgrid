@@ -9,8 +9,6 @@ DATA_GRID_MAX = 65535
 REQUEST_MAX = 64
 INPUT_MAX = 64
 
-# TODO: Add threads.
-
 # TODO: Strip "dangerous" (unprintable) characters.
 
 class InvalidGridDataException( Exception ):
@@ -53,18 +51,31 @@ class HeartGridHandler( SocketServer.BaseRequestHandler ):
                   )
             elif 'peek' == command_iter[0].lower():
                if 2 > len( command_iter ):
-                  self.request.send( 'usage: peek <address>\n' )
+                  self.request.send( 'usage: peek <address> [length]\n' )
                else:
-                  # TODO: Maybe translate the first argument from hex.
-                  value = self.server.grid_read( int( command_iter[1] ) )
+                  # TODO: Maybe translate the arguments from hex.
+                  address = int( command_iter[1] )
+
+                  if 3 <= len( command_iter ):
+                     # User supplied a length, too.
+                     length = int( command_iter[2] )
+                  else:
+                     length = 1
+
+                  # Send back whatever we found.
+                  value = self.server.grid_read( address, length )
                   if value:
                      self.request.send( value + '\n' )
+
          except InvalidGridDataException, e:
             self.request.send( e.message + '\n' )
          except ValueError, e:
             self.request.send( e.message + '\n' )
 
-class HeartGridServer( SocketServer.TCPServer ):
+class HeartGridServer( SocketServer.ThreadingMixIn, SocketServer.TCPServer ):
+
+   daemon_threads = True
+   allow_reuse_address = True
 
    logger = None
    data_grid = {}
@@ -88,21 +99,17 @@ class HeartGridServer( SocketServer.TCPServer ):
       self.data_lock.acquire()
       
       # If data is longer than 1, split it into the next cell.
-      dest_index_iter = None
+      data_index_iter = address
       for src_index_iter in range( len( data ) ):
-         # If this is our first loop, set the dest index to the address.
-         # Otherwise, increment the dest index.
-         if None == dest_index_iter:
-            dest_index_iter = address
-         else:
-            dest_index_iter += 1
+         # Write the current cell.
+         self.data_grid[data_index_iter] = data[src_index_iter]
+
+         # Increment the data index.
+         data_index_iter += 1
 
          # Wrap the dest index if at the end of the grid.
-         if DATA_GRID_MAX <= dest_index_iter:
-            dest_index_iter = 0
-
-         # Write the current cell.
-         self.data_grid[dest_index_iter] = data[src_index_iter]
+         if DATA_GRID_MAX <= data_index_iter:
+            data_index_iter = 0
 
       self.data_lock.release()
 
@@ -114,7 +121,24 @@ class HeartGridServer( SocketServer.TCPServer ):
          raise InvalidGridDataException( 'request length too long.' )
 
       self.data_lock.acquire()
-      value = self.data_grid[address]
+
+      # Fetch from "length" cells.
+      value = ''
+      data_index_iter = address
+      for out_index_iter in range( length ):
+         # Read the current cell.
+         if self.data_grid[data_index_iter]:
+            value += str( self.data_grid[data_index_iter] )
+         else:
+            value += '0'
+         
+         # Increment the data index.
+         data_index_iter += 1
+
+         # Wrap the dest index if at the end of the grid.
+         if DATA_GRID_MAX <= data_index_iter:
+            data_index_iter = 0
+
       self.data_lock.release()
 
       return value
